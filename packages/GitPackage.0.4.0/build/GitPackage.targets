@@ -1,0 +1,247 @@
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+
+  <PropertyGroup>
+    <GitRepoCache Condition="'$(GitRepoCache)' == '' And '$(HOME)' != ''">$(HOME)\.gitpack</GitRepoCache>
+    <GitRepoCache Condition="'$(GitRepoCache)' == '' And '$(USERPROFILE)' != ''">$(USERPROFILE)\.gitpack</GitRepoCache>
+
+    <PrjGist Condition="'$(PrjGist)' == ''">$(MSBuildProjectDirectory)\gist</PrjGist>
+
+    <GitPack-AutoRestore Condition="'$(GitPack-AutoRestore)' == ''">true</GitPack-AutoRestore>
+
+    <GitPackage-Version>0.4.0</GitPackage-Version>
+  </PropertyGroup>
+
+  <PropertyGroup>
+      <GitPackRestoreDependsOn>
+        gpInit; gpPruneRemoved;
+        gpClone;
+        gpFetch; gpFetchAutoRefresh;
+        gpPrune;
+        gpCheckout; gpCheckoutAttached
+      </GitPackRestoreDependsOn>
+
+      <GitPackRefreshDependsOn>
+      gpInit; gpPruneRemoved;
+      gpClone;
+      gpFetchWithUnversioned; gpPruneWithUnversioned;
+      gpCheckout; gpCheckoutAttached
+      </GitPackRefreshDependsOn>
+  </PropertyGroup>
+   
+  <Target Name="GitPackRestore" DependsOnTargets="$(GitPackRestoreDependsOn)" />
+
+  <Target Name="GitPackRefresh" DependsOnTargets="$(GitPackRefreshDependsOn)" />
+  
+  <Target Name="gpAutoRestore"
+      BeforeTargets="Restore"
+      DependsOnTargets="GitPackRestore"
+      Condition="'$(GitPack-AutoRestore)' == 'true'">
+    <Message Text="Restored git packages" Importance="High" />
+  </Target>
+
+  <Target Name="gpAutoRestoreInVStudio"
+          BeforeTargets="ResolveProjectReferences"
+          DependsOnTargets="gpAutoRestore"
+          Condition="$(BuildingInsideVisualStudio) == 'true'">
+    <!--
+		This will include GitPackage restore in visual-studio design time builds.
+		See: https://github.com/dotnet/project-system/blob/master/docs/design-time-builds.md
+	-->
+  </Target>
+
+  <Target Name="gpInit">
+    <MakeDir Directories="$(GitRepoCache)" />
+    <MakeDir Directories="$(PrjGist)" />
+    
+    <Error Text="Missing Uri for GitPackage %(GitPackage.Identity)"
+           Condition="'%(GitPackage.Uri)' == '' And '@(GitPackage)' != ''" />
+
+    <Error Text="Must have either Version or Attach or neither"
+           Condition=" '%(GitPackage.Version)' != ''  And '%(GitPackage.Attach)' != ''" />
+
+    <CollectGitPackageInfo Root="$(PrjGist)" Items="@(GitPackage)">
+      <Output TaskParameter="Info" ItemName="gpInfo" />
+    </CollectGitPackageInfo>
+
+    <ItemGroup>
+      <gpRemoved Include="@(gpInfo)" Condition="'%(gpInfo.Uri)' == ''" />
+
+      <gpInfo Remove="@(gpRemoved)" /> 
+    </ItemGroup>
+
+    <ItemGroup>
+        <gpInfo>
+          <gpCommitish Condition="'%(gpInfo.Version)' != ''">%(gpInfo.Version)</gpCommitish>
+          <gpCommitish Condition=" '%(gpInfo.Version)' != '' And $([System.Text.RegularExpressions.Regex]::IsMatch('%(gpInfo.Version)', '^[^\/]*$'))">tags/%(gpInfo.Version)</gpCommitish>
+
+          <!-- if nothing, use detached master as unversioned-->
+          <gpCommitish Condition=" '%(gpInfo.Version)' == '' And '%(gpInfo.Attach)' == ''">--detach master</gpCommitish>
+
+          <!--Use repo cache except for attached-->
+          <gpRepoDir Condition="'%(gpInfo.Attach)' == ''">$(GitRepoCache)\%(gpInfo.Identity)</gpRepoDir>
+          <gpRepoDir Condition="'%(gpInfo.Attach)' != ''">$(PrjGist)\%(gpInfo.Identity)</gpRepoDir>
+
+          <gpVerFile>$(PrjGist)\%(gpInfo.Identity).ver</gpVerFile>
+          <gpWorktree>$(PrjGist)\%(gpInfo.Identity)</gpWorktree>
+        </gpInfo>
+      </ItemGroup>
+
+    <ItemGroup>
+      <gpVersioned Include="@(gpInfo)" 
+        Condition=" '%(gpInfo.Version)' != ''"/>
+
+      <gpUnversioned Include="@(gpInfo)" 
+        Condition=" '%(gpInfo.Version)' == '' And %(gpInfo.Attach) == ''"/>
+
+      <gpAttached Include="@(gpInfo)"
+        Condition=" '%(gpInfo.Attach)' != ''" />
+
+      <gpAttachedNeedingRestore Include="@(gpInfo)"
+        Condition=" '%(gpInfo.Attach)' != '' And !Exists('gpInfo.VerFile')" />
+
+      <gpAutoRefreshUnversioned Include="@(gpUnversioned)"
+        Condition=" !Exists('%(gpUnversioned.VerFile)')"/>
+
+      <gpCacheClone Include="@(gpInfo)"
+        Condition=" '%(gpInfo.Attach)' == ''" />
+
+    </ItemGroup>
+
+  </Target>
+
+  <Target Name="gpClone" Inputs="@(gpCacheClone)" 
+    Outputs="@(gpCacheClone -> '$(GitRepoCache)/%(Identity)/.git/')"
+    Condition="'@(gpCacheClone)' != ''">
+    <!-- This will clone for every repository used with different name -->
+    <Message
+        Text="Clone '%(gpCacheClone.Uri)' to '%(gpCacheClone.Identity)'"
+        Condition="!Exists('%(gpCacheClone.gpRepoDir)' )"
+        Importance="High"  />
+        <PropertyGroup>
+          <gitCloneCmd>-1</gitCloneCmd>
+        </PropertyGroup>
+
+    <Exec Command="git clone --bare %(gpCacheClone.Uri) %(gpCacheClone.Identity)"
+        WorkingDirectory="$(GitRepoCache)"
+        Condition="!Exists('%(gpCacheClone.gpRepoDir)')" />
+
+  </Target>
+
+  <Target Name="gpFetch" Outputs="%(gpVersioned.Identity)" >
+    
+    <PropertyGroup>
+      <foundMatchingTag>0</foundMatchingTag>
+    </PropertyGroup>
+
+    <Exec Command="git describe --tags --match %(gpVersioned.Version)"
+      Condition="@(gpVersioned) != ''"
+      StandardErrorImportance="Low"
+      StandardOutputImportance = "Low"
+      WorkingDirectory="%(gpVersioned.gpRepoDir)"
+      EchoOff="true"
+      ConsoleToMsBuild="true"
+      IgnoreExitCode="true">
+      <Output TaskParameter="ExitCode" PropertyName="foundMatchingTag" />
+    </Exec>
+
+    <Message
+      Text="Fetching latest for %(gpVersioned.Identity)"
+      Condition="$(foundMatchingTag) != '0'"
+      Importance="High"  />
+
+    <Exec Command="git fetch --tags --prune origin *:*"
+      StandardOutputImportance="High"
+      StandardErrorImportance="High"
+      WorkingDirectory="%(gpVersioned.gpRepoDir)"
+      Condition="$(foundMatchingTag) != '0'">
+    </Exec>
+
+  </Target>
+
+  <Target Name="gpFetchWithUnversioned" Outputs="%(gpUnversioned.Identity)" DependsOnTargets="gpFetch">
+
+    <Message Text="Fetching latest for %(gpUnversioned.Identity)"
+      Condition=" @(gpUnversioned) != ''"
+      Importance="High"  />
+
+    <Exec Command="git fetch --tags --prune origin master:master"
+      StandardOutputImportance="High"
+      StandardErrorImportance="High"
+      WorkingDirectory="%(gpUnversioned.gpRepoDir)"
+      Condition=" @(gpUnversioned) != ''">
+    </Exec>
+
+  </Target>
+
+  <Target Name="gpFetchAutoRefresh">
+      <Exec Command="git fetch --tags --prune origin master:master"
+      StandardOutputImportance="High"
+      StandardErrorImportance="High"
+      WorkingDirectory="%(gpAutoRefreshUnversioned.gpRepoDir)"
+      Condition=" @(gpAutoRefreshUnversioned) != ''">
+    </Exec>
+  </Target>
+
+  <Target Name="gpPruneRemoved">
+    <RemoveDir Directories="%(gpRemoved.Workspace)" />
+    <Delete Files="%(gpRemoved.VerFile)" />
+  </Target>
+
+  <Target Name="gpPrune">
+    <ItemGroup>
+      <pruneItem Include="@(gpVersioned)"
+        Condition=" '%(gpVersioned.Actual)' != '%(gpVersioned.Version)' "/>
+        
+      <pruneItem Include="@(gpAutoRefreshUnversioned)" />
+    </ItemGroup>
+
+    <Message Text="Prune %(pruneItem.Identity)" Condition=" '@(pruneItem)' != ''" />
+
+    <RemoveDir Directories="%(pruneItem.gpWorktree)" />
+
+    <Delete Files="%(pruneItem.gpVerFile)" />
+
+  </Target>
+
+  <Target Name="gpPruneWithUnversioned" DependsOnTargets="gpPrune">
+      <RemoveDir Directories="%(gpUnversioned.Workspace)" />
+      <Delete Files="%(gpUnversioned.VerFile)" />
+  </Target>
+  
+  <Target Name="gpCheckout" Outputs="%(gpCacheClone.gpVerFile)" Condition=" '@(gpCacheClone)' != ''">
+
+    <Message Text="Checkout %(gpCacheClone.Identity)"
+        Condition="!Exists('%(gpCacheClone.gpWorktree)')"
+        Importance="High"  />
+
+    <Exec Command="git worktree prune"
+      EchoOff="true"
+      WorkingDirectory="%(gpCacheClone.gpRepoDir)"
+      Condition="!Exists('%(gpCacheClone.gpWorktree)')" />
+    
+    <Exec Command="git worktree add %(gpCacheClone.gpWorktree) %(gpCacheClone.gpCommitish)"
+      WorkingDirectory="%(gpCacheClone.gpRepoDir)"
+      Condition="!Exists('%(gpCacheClone.gpWorktree)/')">
+      <Output TaskParameter="ExitCode" PropertyName="workTreeAdded" />
+    </Exec>
+
+    <WriteLinesToFile Overwrite="true" File=" %(gpCacheClone.gpVerFile)" Lines="%(gpCacheClone.Version)" />
+
+    <Touch Files='%(gpInfo.gpVerFile)' AlwaysCreate="true" />
+  </Target>
+
+  <Target Name="gpCheckoutAttached" Outputs="%(gpAttached -> gpInfo.gpVerFile)"
+          Condition="@(gpAttached) != ''">
+
+    <Exec Command='git clone -b %(gpAttached.Attach) "%(gpAttached.Uri)" "%(gpAttached.Identity)"'
+        WorkingDirectory="$(PrjGist)"
+        Condition="!Exists('$(PrjGist)/%(gpAttached.Identity)')" />
+
+    <WriteLinesToFile Overwrite="true" File=" %(gpAttached.gpVerFile)" Lines="%(gpAttached.Attach)" />
+
+    <Touch Files='%(gpAttached.gpVerFile)' AlwaysCreate="true" />
+  </Target>
+
+  <UsingTask TaskName="GitPackage.CollectGitPackageInfo" 
+    AssemblyFile="$(MSBuildThisFileDirectory)..\lib\netstandard2.0\GitPackage.dll" />
+</Project>

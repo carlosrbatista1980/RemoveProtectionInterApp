@@ -1,9 +1,5 @@
 ﻿using System;
-using System.Collections.Generic;
-using System.ComponentModel;
-using System.Data;
 using System.Drawing;
-using System.Text;
 using System.Windows.Forms;
 using System.Diagnostics;
 using System.Threading;
@@ -14,38 +10,40 @@ namespace RemoveProtectionInterApp
 {
     public partial class Form1 : Form
     {
-        bool existeCadeado = false;
-        bool isAdm = false;
-        string processPath = "";        
+        bool existeCadeado = false;        
+        string processPath = "";
+
+        /*** Carlos Rodrigues Batista
+         *** 
+         *** sometimes the interapp is a pain in the ass because it disturbs our support work
+         *** and keeps our clients standing still until we can contact the "IT professional" to turn it off.
+         *** Our clients are the most important part so i will make a tool to rip it off at once.
+         *** if they update, i ll do better
+         ***/
 
         public Form1()
         {
-            InitializeComponent();
-            //CheckAdmin();            
+            InitializeComponent();            
         }
 
         public void Form1_Load(object obj, EventArgs args)
         {
-            CheckAdmin();            
-        }
-
-
-        private void CheckAdmin()
-        {
-            WindowsIdentity login = WindowsIdentity.GetCurrent();
-            WindowsPrincipal principal = new WindowsPrincipal(login);
-            isAdm = principal.IsInRole(WindowsBuiltInRole.Administrator);
-
-            if (isAdm)
+            if(isAdmn())
             {
                 CarregaTimer();
             }
             else
             {
-                MessageBox.Show("Execute como administrador", "");
-                this.Close();
+                MessageBox.Show("Execute como administrador", "Gerenciador de sistema", MessageBoxButtons.OK, MessageBoxIcon.Exclamation);
             }
         }
+
+        public bool isAdmn()
+        {
+            WindowsIdentity login = WindowsIdentity.GetCurrent();
+            WindowsPrincipal principal = new WindowsPrincipal(login);
+            return principal.IsInRole(WindowsBuiltInRole.Administrator);
+        }                      
 
         private void DestruirCadeado()
         {
@@ -57,7 +55,7 @@ namespace RemoveProtectionInterApp
                 {
                     processPath = proc.MainModule.FileName;
                     proc.Kill();
-                    proc.WaitForExit();                    
+                    proc.WaitForExit();
                     if (processPath != "")
                     {
                         File.Delete(processPath);
@@ -77,8 +75,7 @@ namespace RemoveProtectionInterApp
         }
 
         private void DetectarCadeado()
-        {           
-
+        {
             Process[] cadeado = Process.GetProcesses();
             
             foreach (Process proc in cadeado)
@@ -95,7 +92,7 @@ namespace RemoveProtectionInterApp
                     label1.ForeColor = Color.Red;
                     label3.Visible = true;
                     this.Update();
-                    Thread.Sleep(1000);                    
+                    Thread.Sleep(1000);
                 }                
             }
 
@@ -104,9 +101,7 @@ namespace RemoveProtectionInterApp
                 label1.ForeColor = Color.Blue;
                 label1.Text = "O InterApp não está executando.";                
                 label3.Visible = true;                
-                this.Update();
-                //Thread.Sleep(1000);
-                this.Update();
+                this.Update();                                
             }            
         }        
 
@@ -120,7 +115,7 @@ namespace RemoveProtectionInterApp
             DetectarCadeado();
             if (existeCadeado)
             {
-                DestruirCadeado();            
+                DestruirCadeado();
             }            
         }        
     }
